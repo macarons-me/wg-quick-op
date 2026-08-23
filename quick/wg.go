@@ -141,10 +141,20 @@ func Sync(cfg *Config, iface string, logger zerolog.Logger) error {
 	logger.Info().Msg("synced link")
 
 	if err := SyncWireguardDevice(cfg, link, logger); err != nil {
-		logger.Err(err).Msg("cannot sync wireguard link")
+		logger.Err(err).Msg("cannot sync WireGuard device")
 		return err
 	}
-	logger.Info().Msg("synced link")
+	// Userspace implementations may apply their default MTU while finishing
+	// initialization, after the link first becomes visible.
+	link, err = netlink.LinkByName(iface)
+	if err != nil {
+		logger.Err(err).Msg("cannot refresh link")
+		return err
+	}
+	if err := SyncLinkMTU(cfg, link, logger); err != nil {
+		return err
+	}
+	logger.Info().Msg("synced WireGuard device")
 
 	if err := SyncAddress(cfg, link, logger); err != nil {
 		logger.Err(err).Msg("cannot sync addresses")
@@ -224,6 +234,23 @@ func SyncLink(cfg *Config, iface string, logger zerolog.Logger) (netlink.Link, e
 	}
 	logger.Info().Msg("set device up")
 	return link, nil
+}
+
+func SyncLinkMTU(cfg *Config, link netlink.Link, logger zerolog.Logger) error {
+	if cfg.MTU <= 0 {
+		return nil
+	}
+	if link.Attrs().MTU == cfg.MTU {
+		logger.Debug().Int("mtu", cfg.MTU).Msg("device mtu already set")
+		return nil
+	}
+	if err := netlink.LinkSetMTU(link, cfg.MTU); err != nil {
+		logger.Err(err).Int("mtu", cfg.MTU).Msg("cannot set device mtu")
+		return err
+	}
+	link.Attrs().MTU = cfg.MTU
+	logger.Info().Int("mtu", cfg.MTU).Msg("set device mtu")
+	return nil
 }
 
 // SyncAddress adds/deletes all lind assigned IPV4 addressed as specified in the config

@@ -41,7 +41,10 @@ AllowedIPs = 10.10.10.230/32
 Address = 10.192.122.1/24
 PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=
 ListenPort = 51820
+FwMark = 51820
+MTU = 1380
 Table = 1234
+WgBin = wireguard-go
 PostUp = ip rule add ipproto tcp dport 22 table 1234
 PreDown = ip rule delete ipproto tcp dport 22 table 1234
 
@@ -63,5 +66,18 @@ func TestExampleConfig(t *testing.T) {
 			t.Logf("Got after remarshaling:\n%s", tt)
 			assert.Equal(t, cfg, string(tt))
 		})
+	}
+}
+
+func TestFwMarkOffClearsFirewallMark(t *testing.T) {
+	c := &Config{}
+	err := c.UnmarshalText([]byte(`[Interface]
+PrivateKey = oK56DE9Ue9zK76rAc8pBl6opph+1v36lm7cXXsQKrQM=
+FwMark = off
+`))
+
+	assert.NoError(t, err)
+	if assert.NotNil(t, c.FirewallMark) {
+		assert.Equal(t, 0, *c.FirewallMark)
 	}
 }
