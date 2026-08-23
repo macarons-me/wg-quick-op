@@ -81,3 +81,38 @@ FwMark = off
 		assert.Equal(t, 0, *c.FirewallMark)
 	}
 }
+
+// 验证省略、显式零值和 Table=off 在解析与序列化时保持不同语义。
+func TestOptionalMTUAndTable(t *testing.T) {
+	const privateKey = "PrivateKey = oK56DE9Ue9zK76rAc8pBl6opph+1v36lm7cXXsQKrQM=\n"
+	tests := []struct {
+		name       string
+		directives string
+		mtu        *int
+		table      *int
+	}{
+		{name: "omitted"},
+		{name: "explicit zero", directives: "MTU = 0\nTable = 0\n", mtu: intPtr(0), table: intPtr(0)},
+		{name: "custom table", directives: "Table = 1234\n", table: intPtr(1234)},
+		{name: "table off", directives: "Table = off\n", table: intPtr(tableOff)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "[Interface]\n" + privateKey + tt.directives
+			cfg := &Config{}
+
+			assert.NoError(t, cfg.UnmarshalText([]byte(input)))
+			assert.Equal(t, tt.mtu, cfg.MTU)
+			assert.Equal(t, tt.table, cfg.Table)
+
+			output, err := cfg.MarshalText()
+			assert.NoError(t, err)
+			assert.Equal(t, input, string(output))
+		})
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}

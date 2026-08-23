@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/dn-11/wg-quick-op/conf"
 	"github.com/rs/zerolog"
 
 	"github.com/vishvananda/netlink"
@@ -162,7 +163,7 @@ func Sync(cfg *Config, iface string, logger zerolog.Logger) error {
 	}
 	logger.Info().Msg("synced addresses")
 
-	if cfg.Table != nil {
+	if cfg.Table == nil || *cfg.Table != tableOff {
 		var managedRoutes []net.IPNet
 		for _, peer := range cfg.Peers {
 			managedRoutes = append(managedRoutes, peer.AllowedIPs...)
@@ -202,10 +203,14 @@ func SyncLink(cfg *Config, iface string, logger zerolog.Logger) (netlink.Link, e
 		logger.Info().Msg("link not found, creating")
 
 		if cfg.WgBin == "" {
+			mtu := conf.Wireguard.MTU
+			if cfg.MTU != nil {
+				mtu = *cfg.MTU
+			}
 			wgLink := &netlink.GenericLink{
 				LinkAttrs: netlink.LinkAttrs{
 					Name: iface,
-					MTU:  cfg.MTU,
+					MTU:  mtu,
 				},
 				LinkType: "wireguard",
 			}
@@ -237,19 +242,20 @@ func SyncLink(cfg *Config, iface string, logger zerolog.Logger) (netlink.Link, e
 }
 
 func SyncLinkMTU(cfg *Config, link netlink.Link, logger zerolog.Logger) error {
-	if cfg.MTU <= 0 {
+	mtu := conf.Wireguard.MTU
+	if cfg.MTU != nil {
+		mtu = *cfg.MTU
+	}
+	if link.Attrs().MTU == mtu {
+		logger.Debug().Int("mtu", mtu).Msg("device mtu already set")
 		return nil
 	}
-	if link.Attrs().MTU == cfg.MTU {
-		logger.Debug().Int("mtu", cfg.MTU).Msg("device mtu already set")
-		return nil
-	}
-	if err := netlink.LinkSetMTU(link, cfg.MTU); err != nil {
-		logger.Err(err).Int("mtu", cfg.MTU).Msg("cannot set device mtu")
+	if err := netlink.LinkSetMTU(link, mtu); err != nil {
+		logger.Err(err).Int("mtu", mtu).Msg("cannot set device mtu")
 		return err
 	}
-	link.Attrs().MTU = cfg.MTU
-	logger.Info().Int("mtu", cfg.MTU).Msg("set device mtu")
+	link.Attrs().MTU = mtu
+	logger.Info().Int("mtu", mtu).Msg("set device mtu")
 	return nil
 }
 
@@ -319,8 +325,12 @@ func fillRouteDefaults(rt *netlink.Route) {
 
 // SyncRoutes adds/deletes all route assigned IPV4 addressed as specified in the config
 func SyncRoutes(cfg *Config, link netlink.Link, managedRoutes []net.IPNet, logger zerolog.Logger) error {
-	if cfg.Table == nil {
+	if cfg.Table != nil && *cfg.Table == tableOff {
 		return nil
+	}
+	table := 0 // represent default table
+	if cfg.Table != nil {
+		table = *cfg.Table
 	}
 	var wantedRoutes = make(map[string][]netlink.Route, len(managedRoutes))
 	presentRoutes, err := netlink.RouteList(link, syscall.AF_INET)
@@ -336,7 +346,7 @@ func SyncRoutes(cfg *Config, link netlink.Link, managedRoutes []net.IPNet, logge
 		nrt := netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Dst:       &rt,
-			Table:     *cfg.Table,
+			Table:     table,
 			Protocol:  netlink.RouteProtocol(cfg.RouteProtocol),
 			Priority:  cfg.RouteMetric}
 		fillRouteDefaults(&nrt)
@@ -378,7 +388,7 @@ func SyncRoutes(cfg *Config, link netlink.Link, managedRoutes []net.IPNet, logge
 			Int("type", rt.Type).
 			Int("metric", rt.Priority).
 			Logger()
-		if !(rt.Table == *cfg.Table || (*cfg.Table == 0 && rt.Table == unix.RT_CLASS_MAIN)) {
+		if !(rt.Table == table || (table == 0 && rt.Table == unix.RT_CLASS_MAIN)) {
 			log.Debug().Msg("wrong table for route, skipping")
 			continue
 		}

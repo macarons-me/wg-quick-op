@@ -14,7 +14,6 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/dn-11/wg-quick-op/conf"
 	"github.com/dn-11/wg-quick-op/lib/dns"
 	"github.com/rs/zerolog/log"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -31,14 +30,13 @@ type Config struct {
 	DNS []net.IP
 
 	// MTU is automatically determined from the endpoint addresses or the system default route, which is usually a sane choice. However, to manually specify an MTU to override this automatic discovery, this value may be specified explicitly.
-	MTU int
-	// MTUSet tracks whether MTU was explicitly configured, useful to MarshalText.
-	MTUSet bool
+	MTU *int
 
 	// Table — Controls the routing table to which routes are added.
+	// nil(not specified) or 0(netlink unspecified) -> default table
+	// off(represented as -1) -> no table
+	// integer>0 -> use specific table
 	Table *int
-	// TableSet tracks whether Table was explicitly configured, useful to MarshalText.
-	TableSet bool
 
 	// PreUp, PostUp, PreDown, PostDown — script snippets which will be executed by bash(1) before/after setting up/tearing down the interface, most commonly used to configure custom DNS options or firewall rules. The special string ‘%i’ is expanded to INTERFACE. Each one may be specified multiple times, in which case the commands are executed in order.
 	PreUp    []string
@@ -66,11 +64,10 @@ const (
 	ParseNoPeer                  // down
 )
 
+const tableOff = -1
+
 func newConfig() *Config {
-	return &Config{
-		Table: new(int),
-		MTU:   conf.Wireguard.MTU,
-	}
+	return &Config{}
 }
 
 var _ encoding.TextMarshaler = (*Config)(nil)
@@ -94,6 +91,9 @@ func toSeconds(duration time.Duration) int {
 
 func tableString(table *int) string {
 	if table == nil {
+		return ""
+	}
+	if *table == tableOff {
 		return "off"
 	}
 	return strconv.Itoa(*table)
@@ -140,8 +140,8 @@ DNS = {{ . }}
 PrivateKey = {{ .PrivateKey | wgKey }}
 {{- if .ListenPort }}{{ "\n" }}ListenPort = {{ .ListenPort }}{{ end }}
 {{- if .FirewallMark }}{{ "\n" }}FwMark = {{ .FirewallMark | fwmarkString }}{{ end }}
-{{- if .MTUSet }}{{ "\n" }}MTU = {{ .MTU }}{{ end }}
-{{- if .TableSet }}{{ "\n" }}Table = {{ .Table | tableString }}{{ end }}
+{{- if .MTU }}{{ "\n" }}MTU = {{ .MTU }}{{ end }}
+{{- if .Table }}{{ "\n" }}Table = {{ .Table | tableString }}{{ end }}
 {{- if .WgBin }}{{ "\n" }}WgBin = {{ .WgBin }}{{ end }}
 {{- range .PreUp }}{{ "\n" }}PreUp = {{ . }}{{ end }}
 {{- range .PostUp }}{{ "\n" }}PostUp = {{ . }}{{ end }}
@@ -405,12 +405,12 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		cfg.MTU = int(mtu)
-		cfg.MTUSet = true
+		intMTU := int(mtu)
+		cfg.MTU = &intMTU
 	case "Table":
-		cfg.TableSet = true
 		if strings.ToLower(rhs) == "off" {
-			cfg.Table = nil
+			off := tableOff
+			cfg.Table = &off
 			return nil
 		}
 		tbl, err := strconv.ParseInt(rhs, 10, 64)
