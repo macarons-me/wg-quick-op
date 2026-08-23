@@ -111,10 +111,17 @@ func resolveHostDirect(addr string) (netip.Addr, error) {
 
 	// queryWithRetry dns in direct mode
 	ip, err := directDNS(addr)
-	if err != nil {
-		return netip.Addr{}, err
+	if err == nil {
+		log.Info().Str("domain", addr).Stringer("resolved_ip", ip).Str("source", "direct").Msg("DNS resolution succeeded")
+		return ip, nil
 	}
-	return ip, nil
+	log.Warn().Err(err).Str("domain", addr).Msg("direct DNS resolution failed, fallback to public DNS")
+
+	for ip := range queryAAndAAAAAddrIter(dns.Fqdn(addr), publicDNS) {
+		log.Info().Str("domain", addr).Stringer("resolved_ip", ip).Str("source", "public").Msg("DNS resolution succeeded")
+		return ip, nil
+	}
+	return netip.Addr{}, fmt.Errorf("direct DNS resolution and public DNS fallback all failed: %w", err)
 }
 
 func directDNS(domain string) (netip.Addr, error) {
