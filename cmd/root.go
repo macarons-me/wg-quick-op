@@ -1,11 +1,11 @@
 package cmd
 
 import (
+	"os"
+
 	"github.com/dn-11/wg-quick-op/conf"
 	"github.com/dn-11/wg-quick-op/lib/dns"
 	"github.com/rs/zerolog"
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +33,7 @@ func init() {
 		if verbose {
 			zerolog.SetGlobalLevel(zerolog.TraceLevel)
 		}
-		conf.Init(config)
+		conf.Init(config, verbose)
 		dns.Init()
 	}
 	rootCmd.PersistentFlags().StringVarP(&config, "config", "c", "/etc/wg-quick-op.toml", "config file path")
