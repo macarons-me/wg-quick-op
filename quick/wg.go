@@ -163,7 +163,7 @@ func Sync(cfg *Config, iface string, logger zerolog.Logger) error {
 	}
 	logger.Info().Msg("synced addresses")
 
-	if cfg.Table == nil || *cfg.Table != tableOff {
+	if !cfg.Table.IsOff() {
 		var managedRoutes []net.IPNet
 		for _, peer := range cfg.Peers {
 			managedRoutes = append(managedRoutes, peer.AllowedIPs...)
@@ -203,14 +203,9 @@ func SyncLink(cfg *Config, iface string, logger zerolog.Logger) (netlink.Link, e
 		logger.Info().Msg("link not found, creating")
 
 		if cfg.WgBin == "" {
-			mtu := conf.Wireguard.MTU
-			if cfg.MTU != nil {
-				mtu = *cfg.MTU
-			}
 			wgLink := &netlink.GenericLink{
 				LinkAttrs: netlink.LinkAttrs{
 					Name: iface,
-					MTU:  mtu,
 				},
 				LinkType: "wireguard",
 			}
@@ -325,13 +320,10 @@ func fillRouteDefaults(rt *netlink.Route) {
 
 // SyncRoutes adds/deletes all route assigned IPV4 addressed as specified in the config
 func SyncRoutes(cfg *Config, link netlink.Link, managedRoutes []net.IPNet, logger zerolog.Logger) error {
-	if cfg.Table != nil && *cfg.Table == tableOff {
+	if cfg.Table.IsOff() {
 		return nil
 	}
-	table := 0 // represent default table
-	if cfg.Table != nil {
-		table = *cfg.Table
-	}
+	table := cfg.Table.ID()
 	var wantedRoutes = make(map[string][]netlink.Route, len(managedRoutes))
 	presentRoutes, err := netlink.RouteList(link, syscall.AF_INET)
 	if err != nil {

@@ -69,32 +69,25 @@ func TestExampleConfig(t *testing.T) {
 	}
 }
 
-func TestFwMarkOffClearsFirewallMark(t *testing.T) {
-	c := &Config{}
-	err := c.UnmarshalText([]byte(`[Interface]
-PrivateKey = oK56DE9Ue9zK76rAc8pBl6opph+1v36lm7cXXsQKrQM=
-FwMark = off
-`))
-
-	assert.NoError(t, err)
-	if assert.NotNil(t, c.FirewallMark) {
-		assert.Equal(t, 0, *c.FirewallMark)
-	}
-}
-
-// 验证省略、显式零值和 Table=off 在解析与序列化时保持不同语义。
-func TestOptionalMTUAndTable(t *testing.T) {
+// 验证省略、显式零值和 off 在解析与序列化时保持不同语义。
+func TestOptionalInterfaceSettings(t *testing.T) {
 	const privateKey = "PrivateKey = oK56DE9Ue9zK76rAc8pBl6opph+1v36lm7cXXsQKrQM=\n"
 	tests := []struct {
 		name       string
 		directives string
 		mtu        *int
-		table      *int
+		table      *Table
+		tableID    int
+		fwmark     *int
+		wantErr    bool
 	}{
 		{name: "omitted"},
-		{name: "explicit zero", directives: "MTU = 0\nTable = 0\n", mtu: intPtr(0), table: intPtr(0)},
-		{name: "custom table", directives: "Table = 1234\n", table: intPtr(1234)},
-		{name: "table off", directives: "Table = off\n", table: intPtr(tableOff)},
+		{name: "explicit MTU zero", directives: "MTU = 0\n", mtu: new(0)},
+		{name: "table auto", directives: "Table = auto\n", table: new(tableAuto)},
+		{name: "custom table", directives: "Table = 1234\n", table: new(Table(1234)), tableID: 1234},
+		{name: "table off", directives: "Table = off\n", table: new(tableOff), tableID: -1},
+		{name: "table zero", directives: "Table = 0\n", wantErr: true},
+		{name: "fwmark off", directives: "FwMark = off\n", fwmark: new(0)},
 	}
 
 	for _, tt := range tests {
@@ -102,17 +95,20 @@ func TestOptionalMTUAndTable(t *testing.T) {
 			input := "[Interface]\n" + privateKey + tt.directives
 			cfg := &Config{}
 
-			assert.NoError(t, cfg.UnmarshalText([]byte(input)))
+			err := cfg.UnmarshalText([]byte(input))
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
 			assert.Equal(t, tt.mtu, cfg.MTU)
 			assert.Equal(t, tt.table, cfg.Table)
+			assert.Equal(t, tt.tableID, cfg.Table.ID())
+			assert.Equal(t, tt.fwmark, cfg.FirewallMark)
 
 			output, err := cfg.MarshalText()
 			assert.NoError(t, err)
 			assert.Equal(t, input, string(output))
 		})
 	}
-}
-
-func intPtr(value int) *int {
-	return &value
 }

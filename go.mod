@@ -1,6 +1,6 @@
 module github.com/dn-11/wg-quick-op
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0

@@ -33,10 +33,10 @@ type Config struct {
 	MTU *int
 
 	// Table — Controls the routing table to which routes are added.
-	// nil(not specified) or 0(netlink unspecified) -> default table
+	// nil(not specified) or auto(represented as 0) -> default table
 	// off(represented as -1) -> no table
 	// integer>0 -> use specific table
-	Table *int
+	Table *Table
 
 	// PreUp, PostUp, PreDown, PostDown — script snippets which will be executed by bash(1) before/after setting up/tearing down the interface, most commonly used to configure custom DNS options or firewall rules. The special string ‘%i’ is expanded to INTERFACE. Each one may be specified multiple times, in which case the commands are executed in order.
 	PreUp    []string
@@ -64,7 +64,40 @@ const (
 	ParseNoPeer                  // down
 )
 
-const tableOff = -1
+type Table int
+
+const (
+	tableAuto Table = 0
+	tableOff  Table = -1
+)
+
+func (table *Table) String() string {
+	if table == nil {
+		return ""
+	}
+	if table.IsOff() {
+		return "off"
+	}
+	if table.IsAuto() {
+		return "auto"
+	}
+	return strconv.Itoa(int(*table))
+}
+
+func (table *Table) IsOff() bool {
+	return table != nil && *table == tableOff
+}
+
+func (table *Table) IsAuto() bool {
+	return table != nil && *table == tableAuto
+}
+
+func (table *Table) ID() int {
+	if table == nil || table.IsAuto() {
+		return 0
+	}
+	return int(*table)
+}
 
 func newConfig() *Config {
 	return &Config{}
@@ -89,16 +122,6 @@ func toSeconds(duration time.Duration) int {
 	return int(duration / time.Second)
 }
 
-func tableString(table *int) string {
-	if table == nil {
-		return ""
-	}
-	if *table == tableOff {
-		return "off"
-	}
-	return strconv.Itoa(*table)
-}
-
 func fwmarkString(mark *int) string {
 	if mark == nil {
 		return ""
@@ -112,7 +135,6 @@ func fwmarkString(mark *int) string {
 var funcMap = template.FuncMap(map[string]interface{}{
 	"wgKey":        serializeKey,
 	"toSeconds":    toSeconds,
-	"tableString":  tableString,
 	"fwmarkString": fwmarkString,
 })
 
@@ -141,7 +163,7 @@ PrivateKey = {{ .PrivateKey | wgKey }}
 {{- if .ListenPort }}{{ "\n" }}ListenPort = {{ .ListenPort }}{{ end }}
 {{- if .FirewallMark }}{{ "\n" }}FwMark = {{ .FirewallMark | fwmarkString }}{{ end }}
 {{- if .MTU }}{{ "\n" }}MTU = {{ .MTU }}{{ end }}
-{{- if .Table }}{{ "\n" }}Table = {{ .Table | tableString }}{{ end }}
+{{- if .Table }}{{ "\n" }}Table = {{ .Table }}{{ end }}
 {{- if .WgBin }}{{ "\n" }}WgBin = {{ .WgBin }}{{ end }}
 {{- range .PreUp }}{{ "\n" }}PreUp = {{ . }}{{ end }}
 {{- range .PostUp }}{{ "\n" }}PostUp = {{ . }}{{ end }}
@@ -405,27 +427,30 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		intMTU := int(mtu)
-		cfg.MTU = &intMTU
+		cfg.MTU = new(int(mtu))
 	case "Table":
-		if strings.ToLower(rhs) == "off" {
-			off := tableOff
-			cfg.Table = &off
+		switch strings.ToLower(rhs) {
+		case "off":
+			cfg.Table = new(tableOff)
+			return nil
+		case "auto":
+			cfg.Table = new(tableAuto)
 			return nil
 		}
 		tbl, err := strconv.ParseInt(rhs, 10, 64)
 		if err != nil {
 			return err
 		}
-		inttbl := int(tbl)
-		cfg.Table = &inttbl
+		if tbl <= 0 {
+			return fmt.Errorf("table must be auto, off, or a positive integer")
+		}
+		cfg.Table = new(Table(tbl))
 	case "ListenPort":
 		portI64, err := strconv.ParseInt(rhs, 10, 64)
 		if err != nil {
 			return err
 		}
-		port := int(portI64)
-		cfg.ListenPort = &port
+		cfg.ListenPort = new(int(portI64))
 	case "PreUp":
 		cfg.PreUp = append(cfg.PreUp, rhs)
 	case "PostUp":
@@ -444,8 +469,7 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 		cfg.WgBin = rhs
 	case "FwMark":
 		if strings.EqualFold(rhs, "off") {
-			mark := 0
-			cfg.FirewallMark = &mark
+			cfg.FirewallMark = new(0)
 			// only a non-nil value "0" can clear the fwMark, see https://pkg.go.dev/golang.zx2c4.com/wireguard/wgctrl/wgtypes#Config
 			return nil
 		}
@@ -453,8 +477,7 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		mark := int(mark64)
-		cfg.FirewallMark = &mark
+		cfg.FirewallMark = new(int(mark64))
 	default:
 		return fmt.Errorf("unknown directive %s", lhs)
 	}
@@ -498,8 +521,7 @@ func parsePeerLine(peerCfg *wgtypes.PeerConfig, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		dur := time.Duration(t * int64(time.Second))
-		peerCfg.PersistentKeepaliveInterval = &dur
+		peerCfg.PersistentKeepaliveInterval = new(time.Duration(t * int64(time.Second)))
 	default:
 		return fmt.Errorf("unknown directive %s", lhs)
 	}
