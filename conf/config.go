@@ -45,7 +45,7 @@ var Log struct {
 	Level zerolog.Level
 }
 
-func Init(file string, verbose bool) {
+func Init(file string) {
 	if _, err := os.Stat(file); err != nil {
 		if !os.IsNotExist(err) {
 			log.Fatal().Err(err).Msgf("get stat of %s failed", file)
@@ -76,23 +76,6 @@ func Init(file string, verbose bool) {
 		log.Fatal().Err(err).Msgf("read config from %s failed", file)
 	}
 
-	// 优先提取 log.level，结合 verbose 参数，决定最终日志等级
-	lvlStr := viper.GetString("log.level")
-	level, err := zerolog.ParseLevel(lvlStr)
-	if err != nil {
-		level = zerolog.InfoLevel
-	}
-	Log.Level = level
-	if !verbose {
-		zerolog.SetGlobalLevel(level)
-	}
-	if err != nil {
-		// 配置写错的时候，兜底成 info，同时打个 warning 提示，并提示可选loglevel
-		log.Warn().
-			Str("log.level", lvlStr).
-			Msg("invalid log.level, fallback to info; valid levels: trace, debug, info, warn, error, fatal, panic")
-	}
-
 	update()
 
 	viper.OnConfigChange(func(e fsnotify.Event) {
@@ -114,6 +97,21 @@ func update() {
 	EnhancedDNS.DirectResolver.Enabled = viper.GetBool("enhanced_dns.direct_resolver.enabled")
 	EnhancedDNS.DirectResolver.ROAFinder = viper.GetStringSlice("enhanced_dns.direct_resolver.roa_finder")
 	EnhancedDNS.DirectResolver.IPv4Only = viper.GetBool("enhanced_dns.direct_resolver.ipv4_only")
+
+	// 读取日志等级
+	lvlStr := viper.GetString("log.level")
+
+	if level, err := zerolog.ParseLevel(lvlStr); err == nil {
+		Log.Level = level
+		zerolog.SetGlobalLevel(level)
+	} else {
+		// 配置写错的时候，兜底成 info，同时打个 warning 提示，并提示可选loglevel
+		Log.Level = zerolog.InfoLevel
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		log.Warn().
+			Str("log.level", lvlStr).
+			Msg("invalid log.level, fallback to info; valid levels: trace, debug, info, warn, error, fatal, panic")
+	}
 
 	Wireguard.MTU = viper.GetInt("wireguard.MTU")
 	Wireguard.RandomPort = viper.GetBool("wireguard.random_port")
