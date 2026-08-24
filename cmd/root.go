@@ -33,7 +33,7 @@ func init() {
 		if verbose {
 			zerolog.SetGlobalLevel(zerolog.TraceLevel)
 		}
-		conf.Init(config)
+		conf.Init(config, verbose)
 		dns.Init()
 	}
 	rootCmd.PersistentFlags().StringVarP(&config, "config", "c", "/etc/wg-quick-op.toml", "config file path")
