@@ -32,9 +32,6 @@ func queryWithRetry(ctx context.Context, domain string, qType uint16, server net
 			log.Warn().Str("domain", domain).Err(err).Str("server", server.String()).Msg("DNS lookup failed")
 			return err
 		}
-		if rec.Rcode != dns.RcodeSuccess {
-			log.Warn().Msgf("dns server %s failure with rcode %d", server, rec.Rcode)
-		}
 		return nil
 	})
 	if err != nil {
@@ -53,9 +50,13 @@ func queryWithRetryWithList(ctx context.Context, domain string, qType uint16, dn
 			log.Debug().Err(err).Str("domain", domain).Str("server", s.String()).Msg("failed to resolve")
 			continue
 		}
+		if msg.Rcode != dns.RcodeSuccess {
+			log.Debug().Str("domain", domain).Str("server", s.String()).Str("rcode", dns.RcodeToString[msg.Rcode]).Msg("DNS query returned unsuccessful response code")
+			continue
+		}
 		return msg, nil
 	}
-	return nil, errors.New("failed to resolve with all server")
+	return nil, errors.New("no successful DNS response from current server list")
 }
 
 func queryAAndAAAAAddrIter(domain string, dnsList []netip.AddrPort) func(yield func(addr netip.Addr) bool) {
@@ -71,7 +72,7 @@ func queryAAndAAAAAddrIter(domain string, dnsList []netip.AddrPort) func(yield f
 			rec, err := queryWithRetryWithList(ctx, domain, dns.TypeA, dnsList)
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
-					log.Err(err).Msgf("DNS query failed")
+					log.Debug().Err(err).Str("domain", domain).Str("query_type", "A").Msg("DNS query failed for current server list")
 				}
 				return
 			}
@@ -82,7 +83,7 @@ func queryAAndAAAAAddrIter(domain string, dnsList []netip.AddrPort) func(yield f
 				rec, err := queryWithRetryWithList(ctx, domain, dns.TypeAAAA, dnsList)
 				if err != nil {
 					if !errors.Is(err, context.Canceled) {
-						log.Err(err).Msgf("DNS query failed")
+						log.Debug().Err(err).Str("domain", domain).Str("query_type", "AAAA").Msg("DNS query failed for current server list")
 					}
 					return
 				}
@@ -94,13 +95,7 @@ func queryAAndAAAAAddrIter(domain string, dnsList []netip.AddrPort) func(yield f
 			close(resultChan)
 		}()
 
-		select {
-		case <-ctx.Done():
-			return
-		case result, ok := <-resultChan:
-			if !ok {
-				return
-			}
+		for result := range resultChan {
 			for _, rr := range result.Answer {
 				switch rr := rr.(type) {
 				case *dns.A:
