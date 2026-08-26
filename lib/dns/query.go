@@ -3,7 +3,6 @@ package dns
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
 	"sync"
 	"time"
@@ -38,9 +37,6 @@ func queryWithRetry(ctx context.Context, domain string, qType uint16, server net
 	if err != nil {
 		return nil, err
 	}
-	if rec.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("DNS response code %s", dns.RcodeToString[rec.Rcode])
-	}
 	return rec, nil
 }
 
@@ -52,6 +48,10 @@ func queryWithRetryWithList(ctx context.Context, domain string, qType uint16, dn
 				return nil, err
 			}
 			log.Debug().Err(err).Str("domain", domain).Str("server", s.String()).Msg("failed to resolve")
+			continue
+		}
+		if msg.Rcode != dns.RcodeSuccess {
+			log.Debug().Str("domain", domain).Str("server", s.String()).Str("rcode", dns.RcodeToString[msg.Rcode]).Msg("DNS query returned unsuccessful response code")
 			continue
 		}
 		return msg, nil
