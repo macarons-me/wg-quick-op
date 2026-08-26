@@ -14,7 +14,6 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/dn-11/wg-quick-op/conf"
 	"github.com/dn-11/wg-quick-op/lib/dns"
 	"github.com/rs/zerolog/log"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -31,10 +30,13 @@ type Config struct {
 	DNS []net.IP
 
 	// MTU is automatically determined from the endpoint addresses or the system default route, which is usually a sane choice. However, to manually specify an MTU to override this automatic discovery, this value may be specified explicitly.
-	MTU int
+	MTU *int
 
 	// Table — Controls the routing table to which routes are added.
-	Table *int
+	// nil(not specified) or auto(represented as 0) -> default table
+	// off(represented as -1) -> no table
+	// integer>0 -> use specific table
+	Table *Table
 
 	// PreUp, PostUp, PreDown, PostDown — script snippets which will be executed by bash(1) before/after setting up/tearing down the interface, most commonly used to configure custom DNS options or firewall rules. The special string ‘%i’ is expanded to INTERFACE. Each one may be specified multiple times, in which case the commands are executed in order.
 	PreUp    []string
@@ -62,11 +64,43 @@ const (
 	ParseNoPeer                  // down
 )
 
-func newConfig() *Config {
-	return &Config{
-		Table: new(int),
-		MTU:   conf.Wireguard.MTU,
+type Table int
+
+const (
+	tableAuto Table = 0
+	tableOff  Table = -1
+)
+
+func (table *Table) String() string {
+	if table == nil {
+		return ""
 	}
+	if table.IsOff() {
+		return "off"
+	}
+	if table.IsAuto() {
+		return "auto"
+	}
+	return strconv.Itoa(int(*table))
+}
+
+func (table *Table) IsOff() bool {
+	return table != nil && *table == tableOff
+}
+
+func (table *Table) IsAuto() bool {
+	return table != nil && *table == tableAuto
+}
+
+func (table *Table) ID() int {
+	if table == nil || table.IsAuto() {
+		return 0
+	}
+	return int(*table)
+}
+
+func newConfig() *Config {
+	return &Config{}
 }
 
 var _ encoding.TextMarshaler = (*Config)(nil)
@@ -88,9 +122,20 @@ func toSeconds(duration time.Duration) int {
 	return int(duration / time.Second)
 }
 
+func fwmarkString(mark *int) string {
+	if mark == nil {
+		return ""
+	}
+	if *mark == 0 {
+		return "off"
+	}
+	return strconv.Itoa(*mark)
+}
+
 var funcMap = template.FuncMap(map[string]interface{}{
-	"wgKey":     serializeKey,
-	"toSeconds": toSeconds,
+	"wgKey":        serializeKey,
+	"toSeconds":    toSeconds,
+	"fwmarkString": fwmarkString,
 })
 
 var cfgTemplate = template.Must(
@@ -116,12 +161,14 @@ DNS = {{ . }}
 {{- end }}
 PrivateKey = {{ .PrivateKey | wgKey }}
 {{- if .ListenPort }}{{ "\n" }}ListenPort = {{ .ListenPort }}{{ end }}
+{{- if .FirewallMark }}{{ "\n" }}FwMark = {{ .FirewallMark | fwmarkString }}{{ end }}
 {{- if .MTU }}{{ "\n" }}MTU = {{ .MTU }}{{ end }}
 {{- if .Table }}{{ "\n" }}Table = {{ .Table }}{{ end }}
-{{- if .PreUp }}{{ "\n" }}PreUp = {{ .PreUp }}{{ end }}
-{{- if .PostUp }}{{ "\n" }}PostUp = {{ .PostUp }}{{ end }}
-{{- if .PreDown }}{{ "\n" }}PreDown = {{ .PreDown }}{{ end }}
-{{- if .PostDown }}{{ "\n" }}PostDown = {{ .PostDown }}{{ end }}
+{{- if .WgBin }}{{ "\n" }}WgBin = {{ .WgBin }}{{ end }}
+{{- range .PreUp }}{{ "\n" }}PreUp = {{ . }}{{ end }}
+{{- range .PostUp }}{{ "\n" }}PostUp = {{ . }}{{ end }}
+{{- range .PreDown }}{{ "\n" }}PreDown = {{ . }}{{ end }}
+{{- range .PostDown }}{{ "\n" }}PostDown = {{ . }}{{ end }}
 {{- range .Peers }}
 {{- "\n" }}
 [Peer]
@@ -380,25 +427,30 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		cfg.MTU = int(mtu)
+		cfg.MTU = new(int(mtu))
 	case "Table":
-		if strings.ToLower(rhs) == "off" {
-			cfg.Table = nil
+		switch strings.ToLower(rhs) {
+		case "off":
+			cfg.Table = new(tableOff)
+			return nil
+		case "auto":
+			cfg.Table = new(tableAuto)
 			return nil
 		}
 		tbl, err := strconv.ParseInt(rhs, 10, 64)
 		if err != nil {
 			return err
 		}
-		inttbl := int(tbl)
-		cfg.Table = &inttbl
+		if tbl <= 0 {
+			return fmt.Errorf("table must be auto, off, or a positive integer")
+		}
+		cfg.Table = new(Table(tbl))
 	case "ListenPort":
 		portI64, err := strconv.ParseInt(rhs, 10, 64)
 		if err != nil {
 			return err
 		}
-		port := int(portI64)
-		cfg.ListenPort = &port
+		cfg.ListenPort = new(int(portI64))
 	case "PreUp":
 		cfg.PreUp = append(cfg.PreUp, rhs)
 	case "PostUp":
@@ -416,16 +468,16 @@ func parseInterfaceLine(cfg *Config, lhs string, rhs string) error {
 	case "WgBin":
 		cfg.WgBin = rhs
 	case "FwMark":
-		if strings.ToLower(rhs) == "off" {
-			cfg.FirewallMark = nil
+		if strings.EqualFold(rhs, "off") {
+			cfg.FirewallMark = new(0)
+			// only a non-nil value "0" can clear the fwMark, see https://pkg.go.dev/golang.zx2c4.com/wireguard/wgctrl/wgtypes#Config
 			return nil
 		}
 		mark64, err := strconv.ParseInt(rhs, 0, 64)
 		if err != nil {
 			return err
 		}
-		mark := int(mark64)
-		cfg.FirewallMark = &mark
+		cfg.FirewallMark = new(int(mark64))
 	default:
 		return fmt.Errorf("unknown directive %s", lhs)
 	}
@@ -469,8 +521,7 @@ func parsePeerLine(peerCfg *wgtypes.PeerConfig, lhs string, rhs string) error {
 		if err != nil {
 			return err
 		}
-		dur := time.Duration(t * int64(time.Second))
-		peerCfg.PersistentKeepaliveInterval = &dur
+		peerCfg.PersistentKeepaliveInterval = new(time.Duration(t * int64(time.Second)))
 	default:
 		return fmt.Errorf("unknown directive %s", lhs)
 	}
