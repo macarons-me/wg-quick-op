@@ -45,7 +45,7 @@ var Log struct {
 	Level zerolog.Level
 }
 
-func Init(file string) {
+func Init(file string, verbose bool) {
 	if _, err := os.Stat(file); err != nil {
 		if !os.IsNotExist(err) {
 			log.Fatal().Err(err).Msgf("get stat of %s failed", file)
@@ -76,15 +76,15 @@ func Init(file string) {
 		log.Fatal().Err(err).Msgf("read config from %s failed", file)
 	}
 
-	update()
+	update(verbose)
 
 	viper.OnConfigChange(func(e fsnotify.Event) {
-		update()
+		update(verbose)
 	})
 	viper.WatchConfig()
 }
 
-func update() {
+func update(verbose bool) {
 	DDNS.Interval = time.Duration(viper.GetInt("ddns.interval")) * time.Second
 	DDNS.HandleShakeMax = time.Duration(viper.GetInt("ddns.handshake_max")) * time.Second
 	DDNS.IfaceOnly = viper.GetStringSlice("ddns.only_ifaces")
@@ -101,13 +101,16 @@ func update() {
 	// 读取日志等级
 	lvlStr := viper.GetString("log.level")
 
-	if level, err := zerolog.ParseLevel(lvlStr); err == nil {
-		Log.Level = level
-		zerolog.SetGlobalLevel(level)
-	} else {
+	level, err := zerolog.ParseLevel(lvlStr)
+	if err != nil {
+		level = zerolog.InfoLevel
+	}
+	Log.Level = level
+	if !verbose {
+		zerolog.SetGlobalLevel(Log.Level)
+	}
+	if err != nil {
 		// 配置写错的时候，兜底成 info，同时打个 warning 提示，并提示可选loglevel
-		Log.Level = zerolog.InfoLevel
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 		log.Warn().
 			Str("log.level", lvlStr).
 			Msg("invalid log.level, fallback to info; valid levels: trace, debug, info, warn, error, fatal, panic")
